@@ -2,3 +2,7 @@
     - t2
 2. checkNeq of names, strings? If no, remove tenv
 3. can you compare strings with other operands?
+4. actual type with names
+5. eqType with name
+6. Change to sameActualType in vardec
+7. What type should we return if we don't find it in the table in vardec

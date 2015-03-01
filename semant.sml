@@ -25,11 +25,27 @@ struct
   fun checkInt ({exp = _, ty = T.INT}, pos) = ()
     | checkInt ({exp = _, ty = _}, pos) = error pos "Must use type int"
 
+  (* gives type returned by transexp on an exp *)
+  fun transexpVal ({exp, ty}) = ty
+
+  fun eqType (T.INT, T.INT, _) = true
+    | eqType (T.STRING, T.STRING, _) = false
+    | eqType (T.UNIT, T.UNIT, _) = false
+    | eqType (T.RECORD(l1, u1), T.RECORD(l2, u2), _) = if u1 = u2 then true else
+      false
+    | eqType (T.RECORD(l1, u1), T.NIL, _) = true
+    | eqType (T.NIL, T.RECORD(l1, u1), _) = true
+    | eqType (T.ARRAY(t1, u1), T.ARRAY(t2, u2), _) = if u1 = u2 then true else false
+    | eqType (t1, t2, _) = if t1 = t2 then true else false
+
   (* shortens int type returns *)
   fun intRet () = {exp=(), ty=T.INT}
 
   (* shortens string type returns *)
   fun stringRet () = {exp=(), ty=T.STRING}
+
+  (* shortens string type returns *)
+  fun nilRet () = {exp=(), ty=T.NIL}
 
   (* checks that the types are equal for Neq and Eq (can be ints, arrays or
      records *)
@@ -92,9 +108,9 @@ struct
 
           | g (A.StringExp(_, _)) = stringRet()
           | g (A.IntExp(_)) = intRet()
-          | g (A.NilExp) = {exp=(), ty = T.NIL}
+          | g (A.NilExp) = nilRet()
           | g (A.LetExp{decs, body, pos}) = 
-                let (env', tenv') = transdecs (env, tenv, decs)
+                let val (env', tenv') = transdecs (env, tenv, decs)
                 in
                   transexp (env', tenv') body
                 end
@@ -114,7 +130,62 @@ struct
   *                                                                        *
   *  transdec : (E.env * E.tenv * A.dec) -> (E.env * E.tenv)               *
   **************************************************************************)
-  and transdec (env, tenv, A.VarDec(declist)) = (* ... *) (env, tenv)
+  and transdec (env, tenv, A.VarDec{var={name, escape}, typ, init, pos}) = 
+    let
+      val expType = transexpVal(transexp (env, tenv) init)
+    in
+        (case typ of SOME((symbol, pos')) => 
+                    (case S.look(tenv, symbol)
+                     of NONE => (error pos ("undefined type " ^ S.name(symbol)); (* type not in table *)
+                                 let val env' = S.enter(env, name, 
+                                      E.VARentry{access=(), ty=expType})
+                                 in
+                                   (env', tenv)
+                                 end)
+                        | SOME(ty) => if expType = ty then
+                          let
+                            val env' = S.enter(env, name,
+                                E.VARentry{access=(), ty=expType})
+                          in
+                            (env', tenv)
+                          end
+                                      else (* type in table but doesn't match *)
+                                        (error pos "Initialization expression type not equal to constraint type";
+                                        let val env' = S.enter(env, name,
+                                             E.VARentry{access=(), ty=expType})
+                                        in
+                                          (env', tenv)
+                                        end))
+                  | NONE => if expType = T.NIL
+                              then (error pos "NIL initializations must be constrained by a RECORD type";
+                                let
+                                  val env' = S.enter(env, name, 
+                                      E.VARentry{access=(), ty=T.NIL})
+                                in
+                                  (env', tenv)
+                                end) 
+                            else let
+                                  val env' = S.enter(env, name, 
+                                      E.VARentry{access=(), ty=T.NIL})
+                                in
+                                  (env', tenv)
+                                end)
+    end
+                  (*
+           
+          (error pos "NIL initializations must be constrained by RECORD type"; 
+           let 
+             val env' = S.enter(env, name, E.Varentry({access=(), ty=T.NIL}))
+           in
+             (env', tenv)
+           end) 
+         else let
+                val env' = S.enter(env, name, E.VARentry{access=(), ty=typ})
+              in
+                (env', tenv)
+              end;
+              *)
+    
     | transdec (env, tenv, A.FunctionDec(declist)) = (* ... *) (env, tenv)
     | transdec (env, tenv, A.TypeDec(declist)) = (* ... *) (env, tenv)
 
