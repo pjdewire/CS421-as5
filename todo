@@ -6,3 +6,4 @@
 5. eqType with name
 6. Change to sameActualType in vardec
 7. What type should we return if we don't find it in the table in vardec
+8. loop stuff in transdec(A.TypeDec)

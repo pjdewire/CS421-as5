@@ -1,5 +1,6 @@
 let
   var x: string := "string"
+  var y := 3
 in
-  1 <> x
+  y <> x
 end

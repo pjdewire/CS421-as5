@@ -45,7 +45,7 @@ struct
     | eqType (t1, t2, _) = if t1 = t2 then true else false
 
   (* shortens int type returns *)
-  fun intRet () = {exp=(), ty=T.INT}
+  val intRet = {exp=(), ty=T.INT}
 
   (* shortens string type returns *)
   fun stringRet () = {exp=(), ty=T.STRING}
@@ -55,22 +55,22 @@ struct
 
   (* checks that the types are equal for Neq and Eq (can be ints, arrays or
      records *)
-  fun checkNeq ({exp=_, ty=T.INT}, {exp=_, ty=T.INT}, pos, _) = (print "top"; 
-    intRet())
+  fun checkNeq ({exp=_, ty=T.INT}, {exp=_, ty=T.INT}, pos, _) = (print "top\n"; 
+    intRet)
     | checkNeq ({exp=_, ty=T.RECORD(l1, u1)}, {exp=_, ty=T.RECORD(l2, u2)}, 
-                pos, _) = if u1 = u2 then intRet()
+                pos, _) = if u1 = u2 then intRet
                           else (error pos 
                                 "Cannot compare records of different types";
-                                intRet())
+                                intRet)
     | checkNeq ({exp=_, ty=T.RECORD(l1, u1)}, {exp=_, ty=T.NIL}, pos, _) =
-                intRet()
+                intRet
     | checkNeq ({exp=_, ty=T.NIL}, {exp=_, ty=T.RECORD(l1, u1)}, pos, _) =
-                intRet()
+                intRet
     | checkNeq ({exp=_, ty=T.ARRAY(_, u1)}, {exp=_, ty=T.ARRAY(_, u2)},
-                pos, _) = if u1 = u2 then intRet()
+                pos, _) = if u1 = u2 then intRet
                           else (error pos
                                 "Cannot compare arrays of different types";
-                                intRet())
+                                intRet)
     | checkNeq ({exp=_, ty=_}, {exp=_, ty=_}, pos, tenv) = 
         (error pos "Cannot compare these types with <> or =";
          {exp=(), ty=T.INT})
@@ -80,19 +80,25 @@ struct
      let 
        val env' = S.enter(env, name, E.VARentry{access=(), ty=expType})
      in
+       (* debugging
        print "in addVar\n";
        (case S.look(env', S.symbol("x")) of NONE => print "none ADDVAR\n"
            | SOME(ventry) => print("SOME ADDVAR " ^ prType(ventry) ^ " hello\n") );
+       *)
        (env', tenv)
      end
-
 
  (**************************************************************************
   *                   TRANSLATING TYPE EXPRESSIONS                         *
   *                                                                        *
   *              transty : (E.tenv * A.ty) -> (T.ty * A.pos)               *
   *************************************************************************)
-  fun transty (tenv, A.ArrayTy(id, pos)) = (* ... *) (T.UNIT, pos)
+  fun transty (tenv, A.ArrayTy(id, pos)) = 
+    (case S.look(tenv, id)
+      of NONE => (error pos ("Undefined type " ^ S.name(id));
+                  (* what type of array should we return? *)
+                  (T.ARRAY(T.INT, ref ()), pos))
+       | SOME(envRet) => (T.ARRAY(envRet, ref ()), pos))
     | transty (tenv, _ (* other cases *)) = (* ... *) (T.UNIT, 0)
 
   (* ...... *)
@@ -104,6 +110,10 @@ struct
   **************************************************************************)
   fun transexp (env, tenv) expr =
     let fun g (A.OpExp {left,oper=A.NeqOp,right,pos}) = 
+              (* debugging
+              ((case S.look(env, S.symbol("x")) of NONE => print "none OP\n"
+                  | SOME(ty) => print("some OP " ^ prType(ty) ^ "\n"));
+              *)
               checkNeq(g left, g right, pos, tenv)
 
           | g (A.OpExp {left,oper=A.EqOp,right,pos}) =
@@ -118,31 +128,46 @@ struct
                    (* ... *) {exp=(), ty=T.RECORD ((* ? *) [], ref ())}
 
           | g (A.StringExp(_, _)) = stringRet()
-          | g (A.IntExp(_)) = intRet()
+          | g (A.IntExp(_)) = intRet
           | g (A.NilExp) = nilRet()
           | g (A.SeqExp((exp, pos)::exps)) = (g exp; g(A.SeqExp(exps)))
           | g (A.SeqExp([])) = nilRet()
           | g (A.LetExp{decs, body, pos}) = 
                 let val (env', tenv') = transdecs (env, tenv, decs)
                 in
-                  print "hello\n";
-                  (case S.look(env, S.symbol("x")) of NONE => print "none trans\n"
-                      | SOME(ty) => print "some transexp");
-                  (*
-                  (case S.look(env, S.symbol("x"))
-                    of NONE => (print("x not found"); T.UNIT)
-                      | SOME(ty) => ty);
-                      
-                  print("TYPE IS: " ^ "hi");  prType(S.look(env, S.symbol("x")))
-                  *)
-                  
+                  (* debugging 
+                  (case S.look(env', S.symbol("x")) of NONE => print "none trans\n"
+                      | SOME(ty) => print("some transexp " ^ prType(ty) ^ "\n"));
+                   *) 
                   transexp (env', tenv') body
                 end
 
+          | g (A.ArrayExp{typ, size, init, pos}) = 
+            (case getOpt(S.look(tenv, typ), T.INT)
+              of T.ARRAY(arrtype, u) => if not(arrtype = transexpVal(g(init)))
+                then (error pos "Array <type-id> does not match init type";
+                      if transexpVal(g(size)) = T.INT then ()
+                        else error pos "Size of array must be an int";
+                        (* what should we return here? *)
+                      intRet)
+                else (if transexpVal(g(size)) = T.INT then ()
+                        else error pos "Size of array must be an int";
+                       {exp=(), ty=T.ARRAY(arrtype, u)})
+              | _ => (error pos ("Undefined array type " ^ S.name(typ));
+                   (* what should we return here? *)
+                   intRet))
+          | g (A.VarExp(var)) = h(var)
           | g _ (* other cases *) = {exp=(), ty=T.INT} 
 
         (* function dealing with "var", may be mutually recursive with g *)
-        and h (A.SimpleVar (id,pos)) = (* ... *) {exp=(), ty=T.INT}
+        and h (A.SimpleVar (id,pos)) = (case S.look(env, id)  
+          of SOME(E.VARentry{access, ty}) => {exp=(), ty=ty}
+          | NONE => (error pos ("Undefined variable " ^ S.name(id));
+                     (* what type should this return? *)
+                     {exp=(), ty=T.NIL})
+          | _ => (error pos ("Cannot use function " ^ S.name(id) ^ " as a variable");
+                  (* what type should this return? *)
+                  {exp=(), ty=T.NIL}))
 	  | h (A.FieldVar (v,id,pos)) = (* ... *) {exp=(), ty=T.INT}
 	  | h (A.SubscriptVar (v,exp,pos)) = (* ... *) {exp=(), ty=T.INT}
 
@@ -155,30 +180,38 @@ struct
   *  transdec : (E.env * E.tenv * A.dec) -> (E.env * E.tenv)               *
   **************************************************************************)
   and transdec (env, tenv, A.VarDec{var={name, escape}, typ, init, pos}) = 
-    let
-      val expType = transexpVal(transexp (env, tenv) init)
-    in
-        (case typ 
-          (* <type> given in "var id : <type> := exp" *)
-          of SOME((symbol, pos')) => (case S.look(tenv, symbol)
-              (* <type> not in table *)
-              of NONE => (error pos ("Undefined type " ^ S.name(symbol)); 
-                          addVar(env, tenv, name, expType))
-              | SOME(ty) => if expType = ty  
-                              then addVar(env, tenv, name, expType)
-                            else       (* type in table but doesn't match *)
-                              (error pos "Initialization expression type not equal to constraint type";
-                              (* todo: should we add expType or ty? *)
-                              addVar(env, tenv, name, expType)))
-          (* no <type> given *)
-          | NONE => if expType = T.NIL
-                      then (error pos "NIL initializations must be constrained by a RECORD type";
-                        addVar(env, tenv, name, T.STRING))
-                    else addVar(env, tenv, name, expType))
-    end
-    
+      let
+        val expType = transexpVal(transexp (env, tenv) init)
+      in
+          (case typ 
+            (* <type> given in "var id : <type> := exp" *)
+            of SOME((symbol, pos')) => (case S.look(tenv, symbol)
+                (* <type> not in table *)
+                of NONE => (error pos ("Undefined type " ^ S.name(symbol)); 
+                            addVar(env, tenv, name, expType))
+                | SOME(ty) => if expType = ty  
+                                then addVar(env, tenv, name, expType)
+                              else       (* type in table but doesn't match *)
+                                (error pos "Initialization expression type not equal to constraint type";
+                                (* todo: should we add expType or ty? *)
+                                addVar(env, tenv, name, expType)))
+            (* no <type> given *)
+            | NONE => if expType = T.NIL
+                        then (error pos "NIL initializations must be constrained by a RECORD type";
+                          addVar(env, tenv, name, T.STRING))
+                      else addVar(env, tenv, name, expType))
+      end
+      
     | transdec (env, tenv, A.FunctionDec(declist)) = (* ... *) (env, tenv)
-    | transdec (env, tenv, A.TypeDec(declist)) = (* ... *) (env, tenv)
+
+    | transdec (env, tenv, A.TypeDec({name, ty, pos}::ty_tail)) = 
+      let 
+        val (transtyRet, pos') = transty(tenv, ty) 
+        val tenv' = S.enter(tenv, name, transtyRet)
+      in 
+        transdec(env, tenv', A.TypeDec(ty_tail))
+      end
+    | transdec (env, tenv, A.TypeDec(nil)) = (env, tenv)
 
 
 
@@ -194,5 +227,5 @@ struct
   fun transprog prog = transexp (E.base_env, E.base_tenv) prog
 
 end  (* structure Semant *)
-  
+ 
 
