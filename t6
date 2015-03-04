@@ -1,0 +1,6 @@
+let
+  var y := 3
+in
+  y := 3;
+  y <> 2
+end

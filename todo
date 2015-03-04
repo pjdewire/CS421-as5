@@ -7,3 +7,7 @@
 6. Change to sameActualType in vardec
 7. What type should we return if we don't find it in the table in vardec
 8. loop stuff in transdec(A.TypeDec)
+9. different return of transty for not found of NameTy
+10. A.ArrayExp type ever T.NAME?
+11. return value of if-then-else? select
+12. Put baseNameType in all necessary places

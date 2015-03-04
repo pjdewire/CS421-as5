@@ -1,0 +1,7 @@
+let
+  type apple = string
+  type banana = apple
+  var y : banana := "3"
+in
+  y := "3"
+end
