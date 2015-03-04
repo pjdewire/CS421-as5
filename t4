@@ -1,7 +1,8 @@
 let 
   type at = array of int
-  var x := at [3] of 5
+  var x := at ["3"] of 3
+  var y := 3
 in
-  x <> 3
+  x[3] <> 3
 end
 

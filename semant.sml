@@ -18,8 +18,11 @@ struct
   (*** FILL IN DETAILS OF YOUR TYPE CHECKER PLEASE !!! ***)
 
   val depth = ref 0;
+  (* val tempDepth = ref 0; *)
   type linkedList = (S.symbol list) ref
   val initVars : linkedList = ref([])
+  val tempInitVars : linkedList = ref([])
+  val tempRet = ref({exp=(), ty=T.UNIT})
 
   (*************************************************************************
    *                       UTILITY FUNCTIONS                               *
@@ -91,8 +94,7 @@ struct
 
   (* checks that the types are equal for Neq and Eq (can be ints, arrays or
      records *)
-  fun checkNeq ({exp=_, ty=T.INT}, {exp=_, ty=T.INT}, pos, _) = (print "top\n"; 
-    intRet)
+  fun checkNeq ({exp=_, ty=T.INT}, {exp=_, ty=T.INT}, pos, _) = intRet
     | checkNeq ({exp=_, ty=T.RECORD(l1, u1)}, {exp=_, ty=T.RECORD(l2, u2)}, 
                 pos, _) = if u1 = u2 then intRet
                           else (error pos 
@@ -172,10 +174,10 @@ struct
           | g (A.StringExp(_, _)) = stringRet()
           | g (A.IntExp(_)) = intRet
           | g (A.NilExp) = nilRet()
+          | g (A.SeqExp((exp, pos)::nil)) = g exp
           | g (A.SeqExp((exp, pos)::exps)) = (g exp; g(A.SeqExp(exps)))
-          | g (A.SeqExp([])) = nilRet()
+          | g (A.SeqExp([])) = unRet
           | g (A.AssignExp{var, exp, pos}) = 
-            (* **************** MAKE SURE NOT A LOOP VAR **************** *)
             let 
               val expTyp = baseNameType(transexpVal(g exp))
               val varTyp = baseNameType(transexpVal(h(var)))
@@ -187,14 +189,18 @@ struct
               {exp=(), ty=T.UNIT})
             end
           | g (A.LetExp{decs, body, pos}) = 
+                (
+                 (* tempDepth := !depth;
+                 depth := 0; *)
+                 tempInitVars := !initVars;
+                 initVars := [];
                 let val (env', tenv') = transdecs (env, tenv, decs)
                 in
-                  (* debugging 
-                  (case S.look(env', S.symbol("x")) of NONE => print "none trans\n"
-                      | SOME(ty) => print("some transexp " ^ prType(ty) ^ "\n"));
-                   *) 
-                  transexp (env', tenv') body
-                end
+                  (* depth := !tempDepth; *)
+                  tempRet := transexp (env', tenv') body;
+                  initVars := !tempInitVars
+                end;
+                !tempRet)
 
           | g (A.ArrayExp{typ, size, init, pos}) = 
             (case baseNameType(getOpt(S.look(tenv, typ), T.INT))
@@ -202,11 +208,12 @@ struct
                 then (error pos "Array <type-id> does not match init type";
                       if transexpVal(g(size)) = T.INT then ()
                         else error pos "Size of array must be an int";
-                        (* what should we return here? *)
+                        (* what should we return here? Same question below *)
                       intRet)
-                else (if transexpVal(g(size)) = T.INT then ()
-                        else error pos "Size of array must be an int";
-                       {exp=(), ty=T.ARRAY(arrtype, u)})
+                else if transexpVal(g(size)) = T.INT then {exp=(), ty=T.ARRAY(arrtype, u)}
+                        else (error pos "Size of array must be an int";
+                       (* what to return here -- see piazza *)
+                          intRet) (* or {exp=(), ty=T.ARRAY(arrtype, u)}) *)
               | _ => (error pos ("Undefined array type " ^ S.name(typ));
                    (* what should we return here? *)
                    intRet))
@@ -252,7 +259,8 @@ struct
                depth := !depth + 1;
                if baseNameType(transexpVal(transexp (env', tenv') body)) = T.UNIT
                  then (initVars := tl(!initVars); depth := !depth - 1; unRet)
-                 else (error pos ("For: body of loop must be of type unit, not " ^ strType(baseNameType(transexpVal(transexp (env', tenv') body))));
+                 else (error pos ("For: body of loop must be of type unit, not " ^ 
+                       strType(baseNameType(transexpVal(transexp (env', tenv') body))));
                    initVars := tl(!initVars); depth := !depth - 1; unRet)
                )
              end
@@ -269,12 +277,21 @@ struct
           of SOME(E.VARentry{access, ty}) => {exp=(), ty=baseNameType(ty)}
           | NONE => (error pos ("Undefined variable " ^ S.name(id));
                      (* what type should this return? *)
-                     {exp=(), ty=T.NIL})
+                     {exp=(), ty=T.INT})
           | _ => (error pos ("Cannot use function " ^ S.name(id) ^ " as a variable");
                   (* what type should this return? *)
-                  {exp=(), ty=T.NIL}))
+                  {exp=(), ty=T.INT}))
 	  | h (A.FieldVar (v,id,pos)) = (* ... *) {exp=(), ty=T.INT}
-	  | h (A.SubscriptVar (v,exp,pos)) = (* ... *) {exp=(), ty=T.INT}
+	  | h (A.SubscriptVar (v,exp,pos)) = (case h(v)
+          of {exp=_, ty=T.ARRAY(typ, u)} =>
+            if (baseNameType(transexpVal(g exp))) = T.INT then {exp=(), ty=baseNameType(typ)}
+              else (error pos ("Subscript of array variable must be of type INT");
+                    intRet)
+          | _ => (error pos ("Variable " ^ S.name(varToSym(v)) ^ " is not an array");
+          if baseNameType(transexpVal(g exp)) = T.INT then ()
+            else error pos ("Subscript of array variable must be of type INT");
+          intRet)
+        )
 
      in g expr
     end
