@@ -18,7 +18,7 @@ struct
   (*** FILL IN DETAILS OF YOUR TYPE CHECKER PLEASE !!! ***)
 
   val depth = ref 0;
-  (* val tempDepth = ref 0; *)
+  val tempDepth = ref 0;
   type linkedList = (S.symbol list) ref
   val initVars : linkedList = ref([])
   val tempInitVars : linkedList = ref([])
@@ -31,6 +31,19 @@ struct
   (* checks whether an expression is of type int *)
   fun checkInt ({exp = _, ty = T.INT}, pos) = ()
     | checkInt ({exp = _, ty = _}, pos) = error pos "Must use type int"
+
+  (* checks whether there are duplicate fields in a record *)
+  fun checkRecordDups ({name, typ, pos}::rec_tail, prevList) = 
+    if recLookup(name, prevList) 
+      then (error pos "Record cannot have duplicate field names";
+        checkRecordDups(rec_tail, name::prevList))
+      else checkRecordDups(rec_tail, name::prevList)
+    | checkRecordDups (nil, prevList) = ()
+
+  (* searches names that have been parsed so far for duplicates *)
+  and recLookup(key: S.symbol, name::name_tail) = 
+    if key = name then true else recLookup(key, name_tail)
+    | recLookup(key, nil) = false
 
   (* prints a type of a varEntry *)
   fun prType (E.VARentry{access=(), ty=T.NIL}) = "NIL"
@@ -48,25 +61,27 @@ struct
     | strType (T.STRING) = "STRING"
     | strType (T.NAME(name, _)) = "T.NAME"
     | strType (T.UNIT) = "UNIT"
+    | strType (T.RECORD(_,_)) = "RECORD"
     | strType (_) = "OTHER"
 
   (* finds the base type of a name type *)
-    fun baseNameType (T.NAME(sym, ref(SOME(typ)))) = baseNameType(typ)
-      | baseNameType (baseType) = baseType
+  fun baseNameType (T.NAME(sym, ref(SOME(typ)))) = baseNameType(typ)
+    | baseNameType (baseType) = baseType
 
   (* gives type returned by transexp on an exp *)
   fun transexpVal ({exp, ty}) = ty
 
   (* tests whether types are equal *)
-  fun eqType (T.INT, T.INT, _) = true
-    | eqType (T.STRING, T.STRING, _) = false
-    | eqType (T.UNIT, T.UNIT, _) = false
-    | eqType (T.RECORD(l1, u1), T.RECORD(l2, u2), _) = if u1 = u2 then true else
+  (* always call basename before ? *)
+  fun eqType (T.INT, T.INT) = true
+    | eqType (T.STRING, T.STRING) = false
+    | eqType (T.UNIT, T.UNIT) = false
+    | eqType (T.RECORD(l1, u1), T.RECORD(l2, u2)) = if u1 = u2 then true else
       false
-    | eqType (T.RECORD(l1, u1), T.NIL, _) = true
-    | eqType (T.NIL, T.RECORD(l1, u1), _) = true
-    | eqType (T.ARRAY(t1, u1), T.ARRAY(t2, u2), _) = if u1 = u2 then true else false
-    | eqType (t1, t2, _) = if t1 = t2 then true else false
+    | eqType (T.RECORD(l1, u1), T.NIL) = true
+    | eqType (T.NIL, T.RECORD(l1, u1)) = true
+    | eqType (T.ARRAY(t1, u1), T.ARRAY(t2, u2)) = if u1 = u2 then true else false
+    | eqType (t1, t2) = if t1 = t2 then true else false
 
   (* returns the symbol of a variable *)
   fun varToSym (var) = case var
@@ -126,6 +141,19 @@ struct
        (env', tenv)
      end
 
+   (* returns the (symbol, ty) list of a record, and checks for errors *)
+   fun symTyPairList({name, typ, pos}::rec_tail, tenv) =
+     (case S.look(tenv, typ)
+        of  SOME(fieldType) => (name,
+        baseNameType(fieldType))::symTyPairList(rec_tail, tenv)
+          | NONE => (error pos "Undefined type in record declaration";
+                     (name, T.UNIT)::symTyPairList(rec_tail, tenv)))
+     | symTyPairList (nil, tenv) = []
+
+   (* find the length of a a list *)
+   fun lstLen(field::fields) = 1 + lstLen(fields)
+     | lstLen(nil) = 0
+
  (**************************************************************************
   *                   TRANSLATING TYPE EXPRESSIONS                         *
   *                                                                        *
@@ -137,15 +165,18 @@ struct
                     (* what type of array should we return? *)
                     (T.ARRAY(T.INT, ref ()), pos))
         | SOME(envRet) => (T.ARRAY(envRet, ref ()), pos))
+    | transty (tenv, A.RecordTy(nil)) = (T.RECORD(nil, ref ()), 0)
+    | transty (tenv, A.RecordTy({name, typ, pos}::rec_tail)) =
+      (
+       checkRecordDups({name=name, typ=typ, pos=pos}::rec_tail, []);
+       (T.RECORD(symTyPairList({name=name, typ=typ, pos=pos}::rec_tail, tenv), ref ()), pos)
+      )
     | transty (tenv, A.NameTy(id, pos)) = 
       (case S.look(tenv, id)
       of NONE => (error pos ("Undefined type " ^ S.name(id));
                   (* what type should we return? *)
                   (T.NAME(id, ref(SOME(T.UNIT))), pos))
        | SOME(ty) => (T.NAME(id, ref(SOME(ty))), pos))
-    | transty (tenv, _ (* other cases *)) = (* ... *) (T.UNIT, 0)
-
-  (* ...... *)
 
  (**************************************************************************
   *                   TRANSLATING EXPRESSIONS                              *
@@ -168,8 +199,18 @@ struct
 		    checkInt (g right, pos);
  		    {exp=(), ty=T.INT})
 
-          | g (A.RecordExp {typ,fields,pos}) =
-                   (* ... *) {exp=(), ty=T.RECORD ((* ? *) [], ref ())}
+          | g (A.RecordExp {fields, typ, pos}) =
+              (case baseNameType(getOpt(S.look(tenv, typ), T.NIL))
+                of T.RECORD(l, u) => 
+                  if not(lstLen(fields) = lstLen(l)) 
+                    then (error pos "Number of fields in this instantation not equal to type definition";
+                          {exp=(), ty=T.INT})
+                    else
+                      if checkEfields(fields, l, true) then {exp=(), ty=T.RECORD(l, u)}
+                      else {exp=(), ty=T.INT}
+                 | _ => (error pos ("Undefined record type " ^ S.name(typ));
+                         {exp=(), ty=T.INT}))
+
 
           | g (A.StringExp(_, _)) = stringRet()
           | g (A.IntExp(_)) = intRet
@@ -204,7 +245,7 @@ struct
 
           | g (A.ArrayExp{typ, size, init, pos}) = 
             (case baseNameType(getOpt(S.look(tenv, typ), T.INT))
-              of T.ARRAY(arrtype, u) => if not(arrtype = transexpVal(g(init)))
+              of T.ARRAY(arrtype, u) => if not(baseNameType(arrtype) = baseNameType(transexpVal(g(init))))
                 then (error pos "Array <type-id> does not match init type";
                       if transexpVal(g(size)) = T.INT then ()
                         else error pos "Size of array must be an int";
@@ -213,7 +254,7 @@ struct
                 else if transexpVal(g(size)) = T.INT then {exp=(), ty=T.ARRAY(arrtype, u)}
                         else (error pos "Size of array must be an int";
                        (* what to return here -- see piazza *)
-                          intRet) (* or {exp=(), ty=T.ARRAY(arrtype, u)}) *)
+                          {exp=(), ty=T.ARRAY(arrtype, u)}) 
               | _ => (error pos ("Undefined array type " ^ S.name(typ));
                    (* what should we return here? *)
                    intRet))
@@ -293,6 +334,26 @@ struct
           intRet)
         )
 
+
+      and checkEfields (nil, nil, tBool) = tBool
+        | checkEfields ((instName, exp, pos)::inst_tail, (decName, decTy)::dec_tail, tBool) =
+          let 
+            val retVal = tBool
+          in
+            (if (instName = decName) then ()
+              else (error pos "Record error: fields out of order";
+                    retVal = false;
+                    ());
+             if (baseNameType(transexpVal(g exp)) = decTy) 
+               then ()
+               else (error pos "Expression in record instantiation not equal to the type of its id";
+                     retVal = false;
+                     ());
+             checkEfields (inst_tail, dec_tail, retVal))
+          end
+        (* should never reach this case b/c we check length *)
+        | checkEfields(_,_,_) = false 
+
      in g expr
     end
 
@@ -311,8 +372,8 @@ struct
                 (* <type> not in table *)
                 of NONE => (error pos ("Undefined type " ^ S.name(symbol)); 
                             addVar(env, tenv, name, baseNameType(expType)))
-                | SOME(ty) => if baseNameType(expType) = baseNameType(ty)
-                                then addVar(env, tenv, name, baseNameType(expType))
+                | SOME(ty) => if eqType(baseNameType(expType), baseNameType(ty))
+                                then addVar(env, tenv, name, ty)
                               else       (* <type> in table but doesn't match *)
                                 (error pos ("Initialization " ^ strType(ty) ^ " expression type not equal to constraint type");
                                 (* todo: should we add expType or ty? *)
@@ -324,7 +385,22 @@ struct
                       else addVar(env, tenv, name, baseNameType(expType)))
       end
       
-    | transdec (env, tenv, A.FunctionDec(declist)) = (* ... *) (env, tenv)
+    | transdec (env, tenv, A.FunctionDec(declist)) =
+    (
+     tempDepth := !depth;
+     loopDepth := 0;
+     let
+     in
+       (
+        loopDepth := !tempDepth;
+        (case result
+          (* procedure *)
+          of NONE =>
+           | SOME(sym, p) => (tenv, env)
+        )
+       )
+     end
+    )
 
     | transdec (env, tenv, A.TypeDec({name, ty, pos}::ty_tail)) = 
       let 

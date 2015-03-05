@@ -1,0 +1,6 @@
+let
+  type a = {age: int, age: apple}
+  var me := a {age = 3}
+in
+  me <> 3
+end
