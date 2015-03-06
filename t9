@@ -1,0 +1,6 @@
+let
+  type node = {p:apples}
+  type apples = int
+  var x:= node {p=9}
+in
+end

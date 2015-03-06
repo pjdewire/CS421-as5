@@ -11,3 +11,4 @@
 10. A.ArrayExp type ever T.NAME?
 11. return value of if-then-else? select
 12. Put baseNameType in all necessary places
+13. Old formalTyList

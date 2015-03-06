@@ -1,81 +1,52 @@
-The order of parameter variables' definition in function interface should
-be like the following:
+Peter Dewire
+Assignment 5 Writeup
 
-If you have    fun f (x:int, y:int, x:string) 
+This assignment was certainly the longest in the class (and by far). This
+probably took 5 times as long as any of the previous assignments, and although
+it was not conceptually too challenging (and Appel does a good job of laying out
+the format and process in which to code), it could be frustrating at times,
+particularly refamiliarizing myself with ML and its write/test/debug cycle.
+However, it was also very interesting and clarified a lot of what we have been
+doing in the other assignments (where the required output was less clear), and
+it was enjoyable to writing in a real programming language again as opposed to
+simply using tools like ML-Lex or ML-Yacc. 
 
-then in the body of f all references of x are to the second x which is a 
-string.
+I began the assignment by reading Ch. 5 of Appel, looking through the slides,
+and reading over the spec as usual. It took some time to understand the problem
+fully and actually begin the process of writing code. I started with env.sml,
+which was relatively straightforward. Then I moved onto semant.sml, beginning
+with OpExp, and slowly making my way forward. At each stage of implementation, I
+used small unit tests to make sure the feature I just implemented was working as
+expected and I could count on my program as it grew to enormous size (>600
+lines). I found the most challenging parts to be records, arrays, and function
+declarations. There were a lot of things to test in each of these cases, and
+Tiger's syntax for arrays and records is somewhat complex and unusual. 
 
-Alternatively, you could insist that the names for parameter variables
-of each function must be different from each other.
+------------------------
+Implementation Decisions
+------------------------
 
-==========================================================================
-Programming exercise described in Modern Compiler Implementation in ML, 
-Chapter 5, on page 121 - 122. This assignment is to implement a type 
-checker for the Tiger language. Please read Chapter 5 of Appel very 
-CAREFULLY before starting to work on the assignment.  
+One decision that I faced early on was what to return after hitting errors. In
+most cases, I return intRet, which is equivalent to {exp=(), ty=T.INT}. I made
+this decision based on comments on Piazza, which suggested that in general it
+didn't matter, but that returning T.INT's was fine. This became slightly more
+complicated in cases where there where arrays/records of other types, but in
+general I chose to return arrays/records of T.INT if there was an error in the
+type. If there error was so significant that no type could be determined, I
+would usually simply return intRet.
 
-You need to do both Part (a) and Part (b) of the type checker (see pp. 
-121 - 122 of Appel). But it is a good idea to make Part (a) work correctly 
-first before embarking on Part (b).
+The other major decision I had to make was what output to produce: that is,
+whether to follow the output in the testfiles themselves or in the .std files.
+In many cases, these were the same, but in others they were not, such as in
+test06 and test08. I choose to make my errors conform to that of test06.std,
+because those seemed more sensible, whereas in test08 I outputted two errors,
+one from .std and one frmo both .std and .tig. Based on my understanding of the
+piazza of our error messages, we could choose for ourselves which to follow, and
+the exact positions and wording of the errors was up to us.
 
-WARNING: sample code in Appel's book contains many syntactic errors, so 
-don't try to copy the code from Appel's book into your semant.sml. 
-Understand the problem and write your own code.
 
-The "/c/cs421/as/as5" now contains the following files:
-
-     absyn.sml
-     errormsg.sml
-     table.sig
-     table.sml
-     symbol.sml
-     parse.sml
-       These are copied from the "as4" directory.
-
-     types.sml
-       The internal representation of types.
-
-     main.sml
-       The top level program used to test your typechecker. 
-       Function call "Main.comp fname" will parse and typecheck the
-       tiger program in file "fname". Function call "Main.testit()" 
-       will parse and typecheck all 49 tiger programs in the 
-       "/c/cs421/as/testcases" directory.
-
-     env.sml
-     semant.sml
-       The skeleton env.sml and semant.sml files. You need to fill in
-       the details in these two files.
-
-     sources.cm
-       The makefile.
-
-     sources-mine.cm
-       The sources.cm file if you want to use my lexer and parser. 
-
-To start working on the assignment, copy all the above files into
-your working directory, copy your tiger.lex and tiger.grm file from your
-previous assignments, then start writing "env.sml" and "semant.sml".
-
-If your lexer or parser still does not work, you can use the 
-"sources-mine.cm" file as your "sources.cm" file. This will use my lexer 
-and parser instead. But I do NOT recommend this. I hope all of you will
-spend time debugging through your old assignments and use your own lexer 
-and parser in the future assignments.
-
-Finally, you need to turn in the following three files 
-
-     README (more documentation is better)
-     env.sml
-     semant.sml
-
-This is probably the LARGEST assignment in this class. To most of you,
-it would probably take days. Please start working on it as early as you 
-can. Also please make sure that your type-checker prints out friendly
-error messages. 
-
-Enjoy,
-
--Zhong Shao
-(shao-zhong@cs.yale.edu)
+Overall, as5 was extremely stressful and challenging. It took an incredible
+amount of time, as Prof. Zhao warned. Fortunately, I started earlier than I did
+for the other assignments, but I would have started earlier had I known how long
+it was going to take me. Despite the stress, it was an interesting assignment
+and I feel much more comfortable in ML and with the concept of type checking.

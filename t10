@@ -1,0 +1,5 @@
+let
+  type tree = {left : tree}
+  var t := tree {left = t} 
+in
+end

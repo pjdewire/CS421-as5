@@ -1,3 +1,10 @@
+(*
+* Peter Dewire
+* semant.sml
+*
+* semant performs type checking for the Tiger language
+*)
+
 signature SEMANT =
 sig
   type ir_code
@@ -29,8 +36,17 @@ struct
    *************************************************************************)
 
   (* checks whether an expression is of type int *)
-  fun checkInt ({exp = _, ty = T.INT}, pos) = ()
-    | checkInt ({exp = _, ty = _}, pos) = error pos "Must use type int"
+  fun checkInt ({exp = _, ty = T.INT}, {exp=_, ty=T.INT}, pos) = ()
+    | checkInt ({exp = _, ty = T.STRING}, {exp=_, ty=T.STRING}, pos) = ()
+    | checkInt ({exp = _, ty = _}, {exp=_, ty=_}, pos) = error pos "Must use type int"
+
+  (* returns true if expType is T.RECORD, false otherwise *)
+  fun isRecord (T.RECORD(l, u)) = true
+    | isRecord (_) = false
+
+  (* list lookup function: used to prevent assignment to loop variable *)
+  fun lookup (key: S.symbol, x::tail) = if x = key then true else lookup (key, tail)
+    | lookup (key: S.symbol, nil) = false
 
   (* checks whether there are duplicate fields in a record *)
   fun checkRecordDups ({name, typ, pos}::rec_tail, prevList) = 
@@ -45,15 +61,71 @@ struct
     if key = name then true else recLookup(key, name_tail)
     | recLookup(key, nil) = false
 
+  (* checks whether a given field is in a record *)
+  fun recFind((s1, typ)::rec_tail, key, pos) = if S.name(s1) = S.name(key) then typ else recFind(rec_tail, key, pos)
+    | recFind(nil, key, pos) = (error pos "Field not in record"; T.INT)
+
+  (* checks whether there are duplicated paramters in a fundec -- not used *)
+  and checkParamDups ({var={name=key, escape=_}, typ=_, pos=pos}::params_tail, prevList) =
+      (if recLookup(key, prevList) 
+        then error pos "Duplicate paramaters in function declaration"
+        else ();
+       checkParamDups (params_tail, key::prevList))
+    | checkParamDups (nil, prevList) = ()
+
+  (* creates list to allow shadowing *)
+  fun shadowList ({var={name, escape}, typ, pos}:: params_tail) = 
+      name::shadowList(params_tail)
+    | shadowList (nil) = []
+
+  (* creates a ty list for formals in FUNentry *)
+  fun formalTyList ({var={name, escape}, typ, pos}::params_tail, tenv, sl) = 
+      if not(lookup(name, tl(sl))) then paramLookup(typ, pos, tenv)::formalTyList(params_tail, tenv, tl(sl))
+      else paramLookup(typ, pos, tenv)::formalTyList(params_tail, tenv, tl(sl))
+    | formalTyList (nil, tenv, sl) = []
+
+  (* looks up paramater type typ in tenv *)
+  and paramLookup (typ, pos, tenv) = (case S.look(tenv, typ)
+    of NONE => (error pos "Function declaration error: undefined paramter type";
+                T.INT)
+     | SOME(t) => t)
+
+  (* finds the base type of a name type *)
+  fun baseNameType (T.NAME(sym, ref(SOME(typ)))) = baseNameType(typ)
+    | baseNameType (baseType) = baseType
+
+   fun detectTypeLoop (tenv, T.NAME(s1, typ), orig) = if orig = s1 
+      then true
+      (* else detectTypeLoop(tenv, getOpt(typ, T.UNIT), orig) *)
+      else (case !typ 
+        of SOME(t) => detectTypeLoop(tenv, t, orig)
+         | NONE => false)
+     | detectTypeLoop (tenv, _, orig) = false
+
+  (* looks up symbol in tenv *)
+  fun symLookup (sym, pos, tenv) = 
+    (case S.look(tenv, sym)
+       of NONE => (error pos "Return type for function undefined"; T.INT)
+        | SOME(t) => t)
+
+  (* fills out the empty fields of the return from mutRecursiveEnv *)
+  fun setTypes((name,T.NAME(sym, typ))::rec_tail, tenv, pos) = (typ:= S.look(tenv,sym); 
+                                                                setTypes(rec_tail, tenv,pos))
+    | setTypes((name,ty)::rec_tail, tenv, pos) = setTypes(rec_tail, tenv, pos)
+    | setTypes(nil, tenv, pos) = tenv
+
+  (* checks whether there are any empty type fields in the record *)
+  fun checkEmptyTypes ((sym, typ)::rec_tail) = (case baseNameType(typ)
+    of T.NAME(_, _) => true
+     | _ => checkEmptyTypes(rec_tail)
+     )
+    | checkEmptyTypes (nil) = false
+
   (* prints a type of a varEntry *)
   fun prType (E.VARentry{access=(), ty=T.NIL}) = "NIL"
     | prType (E.VARentry{access=(), ty=T.INT}) = "INT"
     | prType (E.VARentry{access=(), ty=T.STRING}) = "STRING"
     | prType (ty) = "other"
-
-  (* list lookup function: used to prevent assignment to loop variable *)
-  fun lookup (key: S.symbol, x::tail) = if x = key then true else lookup (key, tail)
-    | lookup (key: S.symbol, nil) = false
 
   (* prints a type from a type *)
   fun strType (T.NIL) = "NIL"
@@ -64,18 +136,14 @@ struct
     | strType (T.RECORD(_,_)) = "RECORD"
     | strType (_) = "OTHER"
 
-  (* finds the base type of a name type *)
-  fun baseNameType (T.NAME(sym, ref(SOME(typ)))) = baseNameType(typ)
-    | baseNameType (baseType) = baseType
-
   (* gives type returned by transexp on an exp *)
   fun transexpVal ({exp, ty}) = ty
 
   (* tests whether types are equal *)
   (* always call basename before ? *)
   fun eqType (T.INT, T.INT) = true
-    | eqType (T.STRING, T.STRING) = false
-    | eqType (T.UNIT, T.UNIT) = false
+    | eqType (T.STRING, T.STRING) = true
+    | eqType (T.UNIT, T.UNIT) = true
     | eqType (T.RECORD(l1, u1), T.RECORD(l2, u2)) = if u1 = u2 then true else
       false
     | eqType (T.RECORD(l1, u1), T.NIL) = true
@@ -110,9 +178,10 @@ struct
   (* checks that the types are equal for Neq and Eq (can be ints, arrays or
      records *)
   fun checkNeq ({exp=_, ty=T.INT}, {exp=_, ty=T.INT}, pos, _) = intRet
+    | checkNeq ({exp=_, ty=T.STRING}, {exp=_, ty=T.STRING}, pos, _) = intRet
     | checkNeq ({exp=_, ty=T.RECORD(l1, u1)}, {exp=_, ty=T.RECORD(l2, u2)}, 
                 pos, _) = if u1 = u2 then intRet
-                          else (error pos 
+                          else (error pos
                                 "Cannot compare records of different types";
                                 intRet)
     | checkNeq ({exp=_, ty=T.RECORD(l1, u1)}, {exp=_, ty=T.NIL}, pos, _) =
@@ -141,6 +210,22 @@ struct
        (env', tenv)
      end
 
+   (* adds function to environment env *)
+  fun addFunc (env, tenv, name, formals, typ) =
+    let
+      val env' = S.enter(env, name, E.FUNentry{level=(), label=(), formals=formals, result = typ})
+    in
+      env'
+    end
+
+   (* same as addVar, but returns env' instead of (env', tenv')*)
+   fun addVarEnvOnly (env, tenv, name, expType) = 
+     let 
+       val env' = S.enter(env, name, E.VARentry{access=(), ty=expType})
+     in
+       env'
+     end
+
    (* returns the (symbol, ty) list of a record, and checks for errors *)
    fun symTyPairList({name, typ, pos}::rec_tail, tenv) =
      (case S.look(tenv, typ)
@@ -153,6 +238,26 @@ struct
    (* find the length of a a list *)
    fun lstLen(field::fields) = 1 + lstLen(fields)
      | lstLen(nil) = 0
+
+   (* returns a temporary env for use in function declarations *)
+   fun funcEnv({name=name1, params=({var={name=name2, escape=_}, typ=typ, pos=p2}::params_tail), 
+                result=res, body=body, pos=pos1}, env, tenv) =
+       (case S.look(tenv, typ)
+         of NONE => (error p2 "Function paramater: undefined type";
+              let
+                val env' = addVarEnvOnly(env, tenv, name2, T.INT)
+              in
+                funcEnv({name=name1, params=params_tail, result=res, body=body, pos=pos1}, env', tenv)
+              end)
+          | SOME(t) => 
+              let
+                val env' = addVarEnvOnly(env, tenv, name2, t)
+              in
+                funcEnv({name=name1, params=params_tail, result=res, body=body, pos=pos1}, env', tenv)
+              end
+       )
+     | funcEnv({name=_, params=[], result=_, body=_, pos=_}, env, _) = env
+
 
  (**************************************************************************
   *                   TRANSLATING TYPE EXPRESSIONS                         *
@@ -195,21 +300,28 @@ struct
               checkNeq(g left, g right, pos, tenv)
 
           | g (A.OpExp {left,oper,right,pos}) =
- 		   (checkInt (g left, pos);
-		    checkInt (g right, pos);
+ 		   (checkInt (g(left), g(right), pos);
  		    {exp=(), ty=T.INT})
 
           | g (A.RecordExp {fields, typ, pos}) =
               (case baseNameType(getOpt(S.look(tenv, typ), T.NIL))
                 of T.RECORD(l, u) => 
-                  if not(lstLen(fields) = lstLen(l)) 
-                    then (error pos "Number of fields in this instantation not equal to type definition";
-                          {exp=(), ty=T.INT})
+                  if checkEmptyTypes(l) 
+                    then transexp (env, setTypes(l, tenv, pos)) expr
                     else
-                      if checkEfields(fields, l, true) then {exp=(), ty=T.RECORD(l, u)}
-                      else {exp=(), ty=T.INT}
-                 | _ => (error pos ("Undefined record type " ^ S.name(typ));
-                         {exp=(), ty=T.INT}))
+                        (if not(lstLen(fields) = lstLen(l)) 
+                          then (error pos "Number of fields in this instantation not equal to type definition";
+                                {exp=(), ty=T.INT})
+                          else
+                            (if checkNames(fields, l, true) then
+                               checkEfields(fields, l) else ();
+                               {exp=(), ty=T.RECORD(l, u)}))
+                               (*
+                            if checkEfields(fields, l, true) then {exp=(), ty=T.RECORD(l, u)}
+                            else  {exp=(), ty=T.INT})
+                            *)
+                | _ => (error pos ("Undefined record type " ^ S.name(typ));
+                        {exp=(), ty=T.INT}))
 
 
           | g (A.StringExp(_, _)) = stringRet()
@@ -245,19 +357,36 @@ struct
 
           | g (A.ArrayExp{typ, size, init, pos}) = 
             (case baseNameType(getOpt(S.look(tenv, typ), T.INT))
-              of T.ARRAY(arrtype, u) => if not(baseNameType(arrtype) = baseNameType(transexpVal(g(init))))
-                then (error pos "Array <type-id> does not match init type";
+              of T.ARRAY(arrtype, u) => 
+                let 
+                  val initType = baseNameType(transexpVal(g(init)))
+                in
+                  if (not(baseNameType(arrtype) = initType)
+                      andalso not(initType = T.NIL))
+                    then (error pos "Array <type-id> does not match init type";
                       if transexpVal(g(size)) = T.INT then ()
                         else error pos "Size of array must be an int";
                         (* what should we return here? Same question below *)
                       intRet)
-                else if transexpVal(g(size)) = T.INT then {exp=(), ty=T.ARRAY(arrtype, u)}
+                    else if transexpVal(g(size)) = T.INT then {exp=(), ty=T.ARRAY(arrtype, u)}
                         else (error pos "Size of array must be an int";
                        (* what to return here -- see piazza *)
                           {exp=(), ty=T.ARRAY(arrtype, u)}) 
+                end
               | _ => (error pos ("Undefined array type " ^ S.name(typ));
                    (* what should we return here? *)
                    intRet))
+
+          | g (A.AppExp{func, args, pos}) =
+             (case S.look(env, func)
+               of NONE => (error pos ("Undefined function " ^ S.name(func)); intRet)
+                | SOME(E.VARentry{access, ty}) =>
+                    (error pos "Trying to access variable as a function";
+                     intRet)
+                | SOME(E.FUNentry{level, label, formals, result}) =>
+                    (checkParams(formals, args, pos);
+                    {exp=(), ty=result}))
+
 
           | g (A.IfExp{test, then', else', pos}) =
                (* test must be an integer expression *)
@@ -268,8 +397,9 @@ struct
               (case else'
                    (* if-then-else. expressions must be of equal type *)
                 of SOME(exp) => 
-                  if eqTwoExps(g then', g exp, tenv)
-                    then {exp=(), ty=transexpVal(g exp)}
+                  if eqTwoExps(g then', g exp, tenv) orelse
+                     baseNameType(transexpVal(g(exp))) = T.NIL
+                    then {exp=(), ty=transexpVal(g then')}
                     else (error pos "then and else expressions must of equal type";
                          unRet)
                    (* if-then, no else. expression must produce no value *)
@@ -280,7 +410,7 @@ struct
 
           | g (A.WhileExp{test, body, pos}) = 
             (if not(baseNameType(transexpVal(g test)) = T.INT)
-               then error pos "While test must be an integer expression"
+               then error pos ("While test must be an integer expression, not " ^ strType(baseNameType(transexpVal(g test))))
                else ();
 
              depth := !depth + 1;
@@ -311,7 +441,6 @@ struct
              else unRet
 
           | g (A.VarExp(var)) = h(var)
-          | g _ (* other cases *) = {exp=(), ty=T.INT}
 
         (* function dealing with "var", may be mutually recursive with g *)
         and h (A.SimpleVar (id,pos)) = (case S.look(env, id)
@@ -322,7 +451,11 @@ struct
           | _ => (error pos ("Cannot use function " ^ S.name(id) ^ " as a variable");
                   (* what type should this return? *)
                   {exp=(), ty=T.INT}))
-	  | h (A.FieldVar (v,id,pos)) = (* ... *) {exp=(), ty=T.INT}
+	  | h (A.FieldVar (v,id,pos)) = (case h(v)
+          of {exp=_, ty=T.RECORD((sym, typ)::rec_tail, _)} =>
+             {exp=(), ty=baseNameType(recFind((sym, typ)::rec_tail, id, pos))}
+          | _ => (error pos ("Variable " ^ S.name(varToSym(v)) ^ " is not a record");
+                  intRet))
 	  | h (A.SubscriptVar (v,exp,pos)) = (case h(v)
           of {exp=_, ty=T.ARRAY(typ, u)} =>
             if (baseNameType(transexpVal(g exp))) = T.INT then {exp=(), ty=baseNameType(typ)}
@@ -334,25 +467,56 @@ struct
           intRet)
         )
 
+      and checkNames ((sym, exp, pos)::rec_tail, (sym2, typ)::dec_tail, retBool) =
+        if sym = sym2 then checkNames(rec_tail, dec_tail, retBool)
+        else (error pos "Record field names not equal to declaration";
+              checkNames(rec_tail, dec_tail, false))
+        | checkNames (_, _, flag) = flag
 
+      and checkEfields ((sym, exp, pos)::rec_tail, (sym2, typ):: dec_tail) =
+        let
+          val expType = baseNameType(transexpVal(g exp))
+        in
+          if eqType(expType, baseNameType(typ)) 
+            then checkEfields (rec_tail, dec_tail)
+            else (error pos ("Record instantiation expression not equal to declaration" ^ strType(expType) ^ ", " ^ strType(baseNameType(typ)));
+                  checkEfields (rec_tail, dec_tail))
+        end
+       | checkEfields (nil, nil) = ()
+       | checkEfields _ = ()
+
+
+      (*
       and checkEfields (nil, nil, tBool) = tBool
         | checkEfields ((instName, exp, pos)::inst_tail, (decName, decTy)::dec_tail, tBool) =
+        (
           let 
             val retVal = tBool
+            val expType = baseNameType(transexpVal(g exp))
           in
             (if (instName = decName) then ()
               else (error pos "Record error: fields out of order";
                     retVal = false;
                     ());
-             if (baseNameType(transexpVal(g exp)) = decTy) 
+             if (expType = baseNameType(decTy) orelse 
+                 (isRecord(expType) andalso baseNameType(decTy) = T.NIL))
                then ()
-               else (error pos "Expression in record instantiation not equal to the type of its id";
+               else (error pos ("Expression in record instantiation not equal to the type of its id: " ^ strType(expType) ^ ", " ^ strType(decTy));
                      retVal = false;
                      ());
              checkEfields (inst_tail, dec_tail, retVal))
           end
+          )
         (* should never reach this case b/c we check length *)
         | checkEfields(_,_,_) = false 
+        *)
+
+     and checkParams((typ)::param_tail, (e1)::exps_tail, pos) = 
+       if (baseNameType(transexpVal(g e1))) = baseNameType(typ)
+          then checkParams(param_tail, exps_tail, pos)
+          else (error pos ("Type of function paramater and expression not equal: ");
+                checkParams(param_tail, exps_tail, pos))
+       | checkParams _ = ()
 
      in g expr
     end
@@ -385,38 +549,111 @@ struct
                       else addVar(env, tenv, name, baseNameType(expType)))
       end
       
-    | transdec (env, tenv, A.FunctionDec(declist)) =
+    | transdec (env, tenv, A.FunctionDec({name, params, result, body, pos}::funTails)) =
     (
      tempDepth := !depth;
-     loopDepth := 0;
+     depth := 0;
+     (* checkParamDups(params, []);*)
      let
+       val tempEnv = funcEnv ({name=name, params=params, result=result, body=body,pos=pos}, env, tenv)
+       val formals = formalTyList (params, tenv, shadowList(params))
+       val expType = transexpVal(transexp (tempEnv, tenv) body)
      in
        (
-        loopDepth := !tempDepth;
+        depth := !tempDepth;
         (case result
           (* procedure *)
-          of NONE =>
-           | SOME(sym, p) => (tenv, env)
+          of NONE => if baseNameType(expType) = T.UNIT
+                       then transdec(addFunc(env, tenv, name, formals, T.UNIT), tenv, A.FunctionDec(funTails))
+                       else (error pos "Procedure body must return unit";
+                       transdec(addFunc(env, tenv, name, formals, T.UNIT), tenv, A.FunctionDec(funTails)))
+          (* function *)
+           | SOME(sym, p) => 
+               if eqType(baseNameType(expType), baseNameType(symLookup(sym, p, tenv)))
+               then transdec(addFunc(env, tenv, name, formals, 
+                  baseNameType(expType)), tenv, A.FunctionDec(funTails))
+               else (error pos "function return type inconsistent with declarations";
+                     transdec(addFunc(env, tenv, name, formals,
+                  baseNameType(symLookup(sym, p, tenv))), tenv, A.FunctionDec(funTails)))
         )
        )
      end
     )
+    | transdec (env, tenv, A.FunctionDec(nil)) = (env, tenv) 
 
     | transdec (env, tenv, A.TypeDec({name, ty, pos}::ty_tail)) = 
       let 
         val (transtyRet, pos') = transty(tenv, ty) 
+        in
+          if detectTypeLoop(tenv, transtyRet, name)
+            then
+              (error pos "Type cycle detected. Type forced to int";
+              let
+                val tenv' = S.enter(tenv, name, T.INT)
+              in
+                transdec(env, tenv', A.TypeDec(ty_tail))
+              end
+              )
+            else
+              let
+                val tenv' = S.enter(tenv, name, transtyRet)
+              in
+                transdec(env, tenv', A.TypeDec(ty_tail))
+              end
+        end
+        (*
         val tenv' = S.enter(tenv, name, transtyRet)
       in 
         transdec(env, tenv', A.TypeDec(ty_tail))
       end
+      *)
+
     | transdec (env, tenv, A.TypeDec(nil)) = (env, tenv)
 
-
+  and mutRecursiveEnv (_, _, env, tenv, A.TypeDec(nil)) = (env, tenv)
+    | mutRecursiveEnv (_,_, env, tenv, A.VarDec{var, typ, init, pos}) = (env, tenv)
+    | mutRecursiveEnv (_, _, env, tenv, A.FunctionDec(nil)) = (env, tenv)
+    | mutRecursiveEnv (mutEnv, mutTenv, env, tenv, A.TypeDec({name, ty, pos}::tydec_tail)) =
+      ((case S.look(mutTenv, name)
+        of NONE => ()
+         | SOME(typ) => error pos "Error: you may not redefine types");
+        mutRecursiveEnv(mutEnv, S.enter(mutTenv, name, T.NAME(name, ref(NONE))), 
+                        env, S.enter(tenv, name, T.NAME(name, ref(NONE))), 
+                        A.TypeDec(tydec_tail)))
+                        
+    | mutRecursiveEnv (mutEnv, mutTenv, env, tenv, A.FunctionDec({name, params,
+        result=NONE, body, pos}::funTails)) = 
+        ((case S.look(mutEnv, name)
+          of NONE => ()
+           | SOME(typ) => error pos "Error: you may not redefine procedures");
+         let
+           val temp =  E.FUNentry{level=(), label=(), formals=formalTyList(params, 
+                     tenv, shadowList(params)), result=T.UNIT}
+         in
+           mutRecursiveEnv(S.enter(mutEnv, name, temp), mutTenv, S.enter(env,
+           name, temp), tenv, A.FunctionDec(funTails))
+         end
+         )
+      | mutRecursiveEnv (mutEnv, mutTenv, env, tenv, A.FunctionDec({name, params,
+          result=SOME((sym1, p2)), body, pos}::funTails)) = 
+          ((case S.look(mutEnv, name)
+            of NONE => ()
+             | SOME(typ) => error pos "Error: you may not redefine functions");
+          let
+            val temp = E.FUNentry{level=(), label=(),
+            formals=formalTyList(params, tenv, shadowList(params)),
+            result=symLookup(sym1, p2, tenv)}
+          in
+            mutRecursiveEnv(S.enter(mutEnv, name, temp), mutTenv, S.enter(env,
+            name, temp), tenv, A.FunctionDec(funTails))
+          end
+          )
 
   (*** transdecs : (E.env * E.tenv * A.dec list) -> (E.env * E.tenv) ***)
   and transdecs (env,tenv,nil) = (env, tenv)
     | transdecs (env,tenv,dec::decs) =
-	let val (env',tenv') = transdec (env,tenv,dec)
+	let val (rEnv, rTenv) = mutRecursiveEnv (S.empty, S.empty, env, tenv, dec);
+      val (env',tenv') = transdec (rEnv,rTenv,dec)
  	 in transdecs (env',tenv',decs)
 	end
 
